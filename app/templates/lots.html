@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Parking lots</h1>
+<table>
+  <thead><tr><th>Lot</th><th>Zone</th><th>Spaces available</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for lot in lots %}
+    <tr>
+      <td>{{ lot.name }}</td>
+      <td>{{ lot.zone }}</td>
+      <td>{{ lot.available }} of {{ lot.capacity }}</td>
+      <td class="{{ lot.status }}">{{ lot.status }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">No lots yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

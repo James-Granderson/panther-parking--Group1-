@@ -1,0 +1,23 @@
+DROP TABLE IF EXISTS lot;
+DROP TABLE IF EXISTS user;
+
+CREATE TABLE user (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email         TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    role          TEXT    NOT NULL DEFAULT 'driver' CHECK (role IN ('driver', 'admin'))
+);
+
+CREATE TABLE lot (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    name     TEXT    NOT NULL UNIQUE,
+    zone     TEXT    NOT NULL,
+    capacity INTEGER NOT NULL CHECK (capacity > 0),
+    occupied INTEGER NOT NULL DEFAULT 0 CHECK (occupied >= 0)
+);
+
+-- Sample data so the app shows something on first run.
+INSERT INTO lot (name, zone, capacity, occupied) VALUES
+    ('Lot 1 - Memorial Student Center', 'Student', 220, 40),
+    ('Lot 7 - Harrington Science',      'Student', 150, 120),
+    ('Lot 12 - Admin Building',         'Faculty/Staff', 80, 80);
