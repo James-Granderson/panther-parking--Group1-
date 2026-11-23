@@ -25,9 +25,14 @@ def create_app(test_config=None):
     from . import db
     db.init_app(app)
 
-    from .routes import auth, lots
+    from .routes import auth, lots, permits, vehicles
     app.register_blueprint(auth.bp)
     app.register_blueprint(lots.bp)
+    app.register_blueprint(vehicles.bp)
+    app.register_blueprint(permits.bp)
     app.add_url_rule("/", endpoint="lots.index")
+
+    from .cli import make_admin_command
+    app.cli.add_command(make_admin_command)
 
     return app

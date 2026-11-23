@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Parking lots</h1>
+{% set is_admin = g.user and g.user['role'] == 'admin' %}
+{% if is_admin %}<p><a href="{{ url_for('lots.new') }}">Add a lot</a></p>{% endif %}
 <table>
-  <thead><tr><th>Lot</th><th>Zone</th><th>Spaces available</th><th>Status</th></tr></thead>
+  <thead><tr><th>Lot</th><th>Zone</th><th>Spaces available</th><th>Status</th>{% if is_admin %}<th></th>{% endif %}</tr></thead>
   <tbody>
   {% for lot in lots %}
     <tr>
@@ -10,6 +12,7 @@
       <td>{{ lot.zone }}</td>
       <td>{{ lot.available }} of {{ lot.capacity }}</td>
       <td class="{{ lot.status }}">{{ lot.status }}</td>
+      {% if is_admin %}<td><a href="{{ url_for('lots.edit', lot_id=lot.id) }}">Edit</a></td>{% endif %}
     </tr>
   {% else %}
     <tr><td colspan="4">No lots yet.</td></tr>

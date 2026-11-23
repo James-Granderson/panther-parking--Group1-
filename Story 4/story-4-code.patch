@@ -1,0 +1,201 @@
+diff --git a/app/__init__.py b/app/__init__.py
+index 0f04748..b313b48 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -32,4 +32,7 @@ def create_app(test_config=None):
+     app.register_blueprint(permits.bp)
+     app.add_url_rule("/", endpoint="lots.index")
+ 
++    from .cli import make_admin_command
++    app.cli.add_command(make_admin_command)
++
+     return app
+diff --git a/app/cli.py b/app/cli.py
+new file mode 100644
+index 0000000..2497721
+--- /dev/null
++++ b/app/cli.py
+@@ -0,0 +1,18 @@
++"""Commands the Parking Office runs from the terminal."""
++import click
++from flask.cli import with_appcontext
++
++from .services import auth_service
++from .services.auth_service import AuthError
++
++
++@click.command("make-admin")
++@click.argument("email")
++@with_appcontext
++def make_admin_command(email):
++    """Give an existing account the admin role."""
++    try:
++        auth_service.make_admin(email)
++    except AuthError as e:
++        raise click.ClickException(str(e))
++    click.echo(f"{email} is now an admin.")
+diff --git a/app/repositories/permit_repository.py b/app/repositories/permit_repository.py
+index 8781d24..d2e8678 100644
+--- a/app/repositories/permit_repository.py
++++ b/app/repositories/permit_repository.py
+@@ -26,3 +26,24 @@ def list_for_user(user_id):
+         (user_id,),
+     ).fetchall()
+     return [dict(r) for r in rows]
++
++
++def find_by_id(permit_id):
++    row = get_db().execute("SELECT * FROM permit WHERE id = ?", (permit_id,)).fetchone()
++    return dict(row) if row else None
++
++
++def list_pending():
++    rows = get_db().execute(
++        "SELECT permit.*, vehicle.plate, user.email FROM permit "
++        "JOIN vehicle ON vehicle.id = permit.vehicle_id "
++        "JOIN user ON user.id = vehicle.user_id "
++        "WHERE permit.status = 'pending' ORDER BY permit.id"
++    ).fetchall()
++    return [dict(r) for r in rows]
++
++
++def set_status(permit_id, status):
++    db = get_db()
++    db.execute("UPDATE permit SET status = ? WHERE id = ?", (status, permit_id))
++    db.commit()
+diff --git a/app/repositories/user_repository.py b/app/repositories/user_repository.py
+index 3a5469e..1640131 100644
+--- a/app/repositories/user_repository.py
++++ b/app/repositories/user_repository.py
+@@ -19,3 +19,9 @@ def create(email, password_hash, role="driver"):
+     )
+     db.commit()
+     return cur.lastrowid
++
++
++def set_role(user_id, role):
++    db = get_db()
++    db.execute("UPDATE user SET role = ? WHERE id = ?", (role, user_id))
++    db.commit()
+diff --git a/app/routes/permits.py b/app/routes/permits.py
+index 7687f75..475fb1f 100644
+--- a/app/routes/permits.py
++++ b/app/routes/permits.py
+@@ -2,7 +2,7 @@ from flask import Blueprint, flash, g, redirect, render_template, request, url_f
+ 
+ from ..services import permit_service
+ from ..services.permit_service import PermitError
+-from .auth import login_required
++from .auth import admin_required, login_required
+ 
+ bp = Blueprint("permits", __name__, url_prefix="/permits")
+ 
+@@ -19,3 +19,30 @@ def index():
+         except PermitError as e:
+             flash(str(e))
+     return render_template("permits.html", **permit_service.dashboard_for(g.user["id"]))
++
++
++@bp.route("/review")
++@admin_required
++def review():
++    return render_template("review.html", permits=permit_service.pending_permits())
++
++
++def _decide(permit_id, decision):
++    try:
++        permit_service.decide(permit_id, decision)
++        flash(f"Permit {decision}.")
++    except PermitError as e:
++        flash(str(e))
++    return redirect(url_for("permits.review"))
++
++
++@bp.route("/<int:permit_id>/approve", methods=("POST",))
++@admin_required
++def approve(permit_id):
++    return _decide(permit_id, "approved")
++
++
++@bp.route("/<int:permit_id>/reject", methods=("POST",))
++@admin_required
++def reject(permit_id):
++    return _decide(permit_id, "rejected")
+diff --git a/app/services/auth_service.py b/app/services/auth_service.py
+index 1d66409..289e382 100644
+--- a/app/services/auth_service.py
++++ b/app/services/auth_service.py
+@@ -26,3 +26,10 @@ def authenticate(email, password):
+     if user is None or not check_password_hash(user["password_hash"], password or ""):
+         raise AuthError("Incorrect email or password.")
+     return user
++
++
++def make_admin(email):
++    user = user_repository.find_by_email((email or "").strip().lower())
++    if user is None:
++        raise AuthError("No account with that email.")
++    user_repository.set_role(user["id"], "admin")
+diff --git a/app/services/permit_service.py b/app/services/permit_service.py
+index a33c0d1..dd82b01 100644
+--- a/app/services/permit_service.py
++++ b/app/services/permit_service.py
+@@ -29,3 +29,19 @@ def dashboard_for(user_id):
+         "vehicles": vehicle_repository.list_for_user(user_id),
+         "zones": lot_repository.list_zones(),
+     }
++
++
++def pending_permits():
++    return permit_repository.list_pending()
++
++
++def decide(permit_id, decision):
++    """Approve or reject a permit. Only a pending permit can be decided."""
++    if decision not in ("approved", "rejected"):
++        raise PermitError("Choose approve or reject.")
++    permit = permit_repository.find_by_id(permit_id)
++    if permit is None:
++        raise PermitError("That permit does not exist.")
++    if permit["status"] != "pending":
++        raise PermitError("That permit has already been decided.")
++    permit_repository.set_status(permit_id, decision)
+diff --git a/app/templates/base.html b/app/templates/base.html
+index 8a79950..056c3b9 100644
+--- a/app/templates/base.html
++++ b/app/templates/base.html
+@@ -25,6 +25,7 @@
+       {% if g.user %}
+         <a href="{{ url_for('vehicles.index') }}">My vehicles</a>
+         <a href="{{ url_for('permits.index') }}">My permits</a>
++        {% if g.user['role'] == 'admin' %}<a href="{{ url_for('permits.review') }}">Review permits</a>{% endif %}
+         <span>{{ g.user['email'] }}</span> <a href="{{ url_for('auth.logout') }}">Log out</a>
+       {% else %}
+         <a href="{{ url_for('auth.register') }}">Register</a> <a href="{{ url_for('auth.login') }}">Log in</a>
+diff --git a/app/templates/review.html b/app/templates/review.html
+new file mode 100644
+index 0000000..bc46ac5
+--- /dev/null
++++ b/app/templates/review.html
+@@ -0,0 +1,21 @@
++{% extends "base.html" %}
++{% block title %}Review permits - Panther Parking{% endblock %}
++{% block content %}
++<h1>Permit applications</h1>
++<table>
++  <thead><tr><th>Driver</th><th>Plate</th><th>Zone</th><th></th></tr></thead>
++  <tbody>
++  {% for p in permits %}
++    <tr>
++      <td>{{ p.email }}</td><td>{{ p.plate }}</td><td>{{ p.zone }}</td>
++      <td>
++        <form method="post" action="{{ url_for('permits.approve', permit_id=p.id) }}" style="display:inline"><button type="submit">Approve</button></form>
++        <form method="post" action="{{ url_for('permits.reject', permit_id=p.id) }}" style="display:inline"><button type="submit">Reject</button></form>
++      </td>
++    </tr>
++  {% else %}
++    <tr><td colspan="4">Nothing waiting for review.</td></tr>
++  {% endfor %}
++  </tbody>
++</table>
++{% endblock %}

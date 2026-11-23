@@ -11,23 +11,33 @@ flowchart TD
     subgraph Presentation["Presentation layer: app/routes/ + app/templates/"]
         AuthRoutes["auth.py"]
         LotRoutes["lots.py"]
+        VehicleRoutes["vehicles.py"]
+        PermitRoutes["permits.py"]
     end
     subgraph Business["Business layer: app/services/"]
         AuthService["auth_service.py"]
         LotService["lot_service.py"]
+        VehicleService["vehicle_service.py"]
+        PermitService["permit_service.py"]
     end
     subgraph Data["Data access layer: app/repositories/"]
         UserRepo["user_repository.py"]
         LotRepo["lot_repository.py"]
+        VehicleRepo["vehicle_repository.py"]
+        PermitRepo["permit_repository.py"]
     end
     DB[("SQLite database")]
 
-    Browser --> AuthRoutes & LotRoutes
+    Browser --> AuthRoutes & LotRoutes & VehicleRoutes & PermitRoutes
     AuthRoutes --> AuthService
     LotRoutes --> LotService
+    VehicleRoutes --> VehicleService
+    PermitRoutes --> PermitService
     AuthService --> UserRepo
     LotService --> LotRepo
-    UserRepo & LotRepo --> DB
+    VehicleService --> VehicleRepo
+    PermitService --> PermitRepo & VehicleRepo & LotRepo
+    UserRepo & LotRepo & VehicleRepo & PermitRepo --> DB
 ```
 
 ## Rules for each layer

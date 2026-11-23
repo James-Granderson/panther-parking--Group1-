@@ -48,6 +48,17 @@ pytest -v
 
 GitHub Actions runs the same tests on every push and pull request.
 
+## Parking Office administration
+
+Register an account, then promote it from the command line:
+
+```bash
+flask --app app make-admin <email>
+```
+
+Admins can create and edit lots and review permit applications. Drivers can
+register vehicles and apply for permits from the web app.
+
 ## Where things go
 
 ```

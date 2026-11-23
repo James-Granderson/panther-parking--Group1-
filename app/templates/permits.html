@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}My permits - Panther Parking{% endblock %}
+{% block content %}
+<h1>My permits</h1>
+<table>
+  <thead><tr><th>Plate</th><th>Zone</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for p in permits %}
+    <tr><td>{{ p.plate }}</td><td>{{ p.zone }}</td><td>{{ p.status }}</td></tr>
+  {% else %}
+    <tr><td colspan="3">No permit applications yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h2>Apply for a permit</h2>
+{% if vehicles %}
+<form method="post">
+  <label>Vehicle <br>
+    <select name="vehicle_id">
+      {% for v in vehicles %}<option value="{{ v.id }}">{{ v.plate }} - {{ v.make }} {{ v.model }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Zone <br>
+    <select name="zone">{% for z in zones %}<option>{{ z }}</option>{% endfor %}</select>
+  </label>
+  <button type="submit">Apply</button>
+</form>
+{% else %}
+<p>Register a vehicle first on the <a href="{{ url_for('vehicles.index') }}">My vehicles</a> page.</p>
+{% endif %}
+{% endblock %}

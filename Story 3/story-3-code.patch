@@ -1,0 +1,208 @@
+diff --git a/app/__init__.py b/app/__init__.py
+index 269084c..0f04748 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -25,10 +25,11 @@ def create_app(test_config=None):
+     from . import db
+     db.init_app(app)
+ 
+-    from .routes import auth, lots, vehicles
++    from .routes import auth, lots, permits, vehicles
+     app.register_blueprint(auth.bp)
+     app.register_blueprint(lots.bp)
+     app.register_blueprint(vehicles.bp)
++    app.register_blueprint(permits.bp)
+     app.add_url_rule("/", endpoint="lots.index")
+ 
+     return app
+diff --git a/app/repositories/lot_repository.py b/app/repositories/lot_repository.py
+index 816aebd..95281bd 100644
+--- a/app/repositories/lot_repository.py
++++ b/app/repositories/lot_repository.py
+@@ -29,3 +29,8 @@ def update(lot_id, name, zone, capacity):
+     db.execute("UPDATE lot SET name = ?, zone = ?, capacity = ? WHERE id = ?",
+                (name, zone, capacity, lot_id))
+     db.commit()
++
++
++def list_zones():
++    rows = get_db().execute("SELECT DISTINCT zone FROM lot ORDER BY zone").fetchall()
++    return [r["zone"] for r in rows]
+diff --git a/app/repositories/permit_repository.py b/app/repositories/permit_repository.py
+new file mode 100644
+index 0000000..8781d24
+--- /dev/null
++++ b/app/repositories/permit_repository.py
+@@ -0,0 +1,28 @@
++from ..db import get_db
++
++
++def create(vehicle_id, zone):
++    db = get_db()
++    cur = db.execute("INSERT INTO permit (vehicle_id, zone) VALUES (?, ?)", (vehicle_id, zone))
++    db.commit()
++    return cur.lastrowid
++
++
++def find_active(vehicle_id, zone):
++    """A pending or approved permit for this vehicle and zone, if there is one."""
++    row = get_db().execute(
++        "SELECT * FROM permit WHERE vehicle_id = ? AND zone = ? "
++        "AND status IN ('pending', 'approved')",
++        (vehicle_id, zone),
++    ).fetchone()
++    return dict(row) if row else None
++
++
++def list_for_user(user_id):
++    rows = get_db().execute(
++        "SELECT permit.*, vehicle.plate FROM permit "
++        "JOIN vehicle ON vehicle.id = permit.vehicle_id "
++        "WHERE vehicle.user_id = ? ORDER BY permit.id",
++        (user_id,),
++    ).fetchall()
++    return [dict(r) for r in rows]
+diff --git a/app/repositories/vehicle_repository.py b/app/repositories/vehicle_repository.py
+index d52243e..375194f 100644
+--- a/app/repositories/vehicle_repository.py
++++ b/app/repositories/vehicle_repository.py
+@@ -21,3 +21,8 @@ def list_for_user(user_id):
+         "SELECT * FROM vehicle WHERE user_id = ? ORDER BY plate", (user_id,)
+     ).fetchall()
+     return [dict(r) for r in rows]
++
++
++def find_by_id(vehicle_id):
++    row = get_db().execute("SELECT * FROM vehicle WHERE id = ?", (vehicle_id,)).fetchone()
++    return dict(row) if row else None
+diff --git a/app/routes/permits.py b/app/routes/permits.py
+new file mode 100644
+index 0000000..7687f75
+--- /dev/null
++++ b/app/routes/permits.py
+@@ -0,0 +1,21 @@
++from flask import Blueprint, flash, g, redirect, render_template, request, url_for
++
++from ..services import permit_service
++from ..services.permit_service import PermitError
++from .auth import login_required
++
++bp = Blueprint("permits", __name__, url_prefix="/permits")
++
++
++@bp.route("/", methods=("GET", "POST"))
++@login_required
++def index():
++    if request.method == "POST":
++        try:
++            permit_service.apply(g.user["id"], request.form.get("vehicle_id"),
++                                 request.form.get("zone"))
++            flash("Permit application submitted.")
++            return redirect(url_for("permits.index"))
++        except PermitError as e:
++            flash(str(e))
++    return render_template("permits.html", **permit_service.dashboard_for(g.user["id"]))
+diff --git a/app/schema.sql b/app/schema.sql
+index caacfd6..7aea58b 100644
+--- a/app/schema.sql
++++ b/app/schema.sql
+@@ -27,6 +27,13 @@ CREATE TABLE vehicle (
+     color   TEXT    NOT NULL
+ );
+ 
++CREATE TABLE permit (
++    id         INTEGER PRIMARY KEY AUTOINCREMENT,
++    vehicle_id INTEGER NOT NULL REFERENCES vehicle (id),
++    zone       TEXT    NOT NULL,
++    status     TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected'))
++);
++
+ -- Sample data so the app shows something on first run.
+ INSERT INTO lot (name, zone, capacity, occupied) VALUES
+     ('Lot 1 - Memorial Student Center', 'Student', 220, 40),
+diff --git a/app/services/permit_service.py b/app/services/permit_service.py
+new file mode 100644
+index 0000000..a33c0d1
+--- /dev/null
++++ b/app/services/permit_service.py
+@@ -0,0 +1,31 @@
++"""Business rules for permits. No Flask request objects and no SQL here."""
++from ..repositories import lot_repository, permit_repository, vehicle_repository
++
++
++class PermitError(Exception):
++    """Raised with a user-facing message when a rule is broken."""
++
++
++def apply(user_id, vehicle_id_raw, zone):
++    zone = (zone or "").strip()
++    try:
++        vehicle_id = int(vehicle_id_raw)
++    except (TypeError, ValueError):
++        raise PermitError("Choose one of your vehicles.")
++    vehicle = vehicle_repository.find_by_id(vehicle_id)
++    if vehicle is None or vehicle["user_id"] != user_id:
++        raise PermitError("That vehicle isn't registered to you.")
++    if zone not in lot_repository.list_zones():
++        raise PermitError("Choose a zone that exists.")
++    if permit_repository.find_active(vehicle_id, zone):
++        raise PermitError("You already have a permit application for this vehicle and zone.")
++    return permit_repository.create(vehicle_id, zone)
++
++
++def dashboard_for(user_id):
++    """Everything the 'My permits' page needs, in one call."""
++    return {
++        "permits": permit_repository.list_for_user(user_id),
++        "vehicles": vehicle_repository.list_for_user(user_id),
++        "zones": lot_repository.list_zones(),
++    }
+diff --git a/app/templates/base.html b/app/templates/base.html
+index 6a8ae7b..8a79950 100644
+--- a/app/templates/base.html
++++ b/app/templates/base.html
+@@ -24,6 +24,7 @@
+       <a href="{{ url_for('lots.index') }}">Lots</a>
+       {% if g.user %}
+         <a href="{{ url_for('vehicles.index') }}">My vehicles</a>
++        <a href="{{ url_for('permits.index') }}">My permits</a>
+         <span>{{ g.user['email'] }}</span> <a href="{{ url_for('auth.logout') }}">Log out</a>
+       {% else %}
+         <a href="{{ url_for('auth.register') }}">Register</a> <a href="{{ url_for('auth.login') }}">Log in</a>
+diff --git a/app/templates/permits.html b/app/templates/permits.html
+new file mode 100644
+index 0000000..af896f3
+--- /dev/null
++++ b/app/templates/permits.html
+@@ -0,0 +1,31 @@
++{% extends "base.html" %}
++{% block title %}My permits - Panther Parking{% endblock %}
++{% block content %}
++<h1>My permits</h1>
++<table>
++  <thead><tr><th>Plate</th><th>Zone</th><th>Status</th></tr></thead>
++  <tbody>
++  {% for p in permits %}
++    <tr><td>{{ p.plate }}</td><td>{{ p.zone }}</td><td>{{ p.status }}</td></tr>
++  {% else %}
++    <tr><td colspan="3">No permit applications yet.</td></tr>
++  {% endfor %}
++  </tbody>
++</table>
++<h2>Apply for a permit</h2>
++{% if vehicles %}
++<form method="post">
++  <label>Vehicle <br>
++    <select name="vehicle_id">
++      {% for v in vehicles %}<option value="{{ v.id }}">{{ v.plate }} - {{ v.make }} {{ v.model }}</option>{% endfor %}
++    </select>
++  </label>
++  <label>Zone <br>
++    <select name="zone">{% for z in zones %}<option>{{ z }}</option>{% endfor %}</select>
++  </label>
++  <button type="submit">Apply</button>
++</form>
++{% else %}
++<p>Register a vehicle first on the <a href="{{ url_for('vehicles.index') }}">My vehicles</a> page.</p>
++{% endif %}
++{% endblock %}
