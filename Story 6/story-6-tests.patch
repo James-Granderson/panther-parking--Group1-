@@ -1,0 +1,117 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+index a61b73a..aa45486 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -2,9 +2,11 @@ import os
+ import tempfile
+ 
+ import pytest
++from werkzeug.security import generate_password_hash
+ 
+ from app import create_app
+ from app.db import init_db
++from app.repositories import user_repository
+ 
+ 
+ @pytest.fixture
+@@ -29,3 +31,13 @@ def register_and_login(client):
+         client.post("/auth/register", data={"email": email, "password": password})
+         return client.post("/auth/login", data={"email": email, "password": password})
+     return _do
++
++
++@pytest.fixture
++def login_as_admin(app, client):
++    """Create an admin directly in the database (there is no sign-up for admins) and log in."""
++    def _do(email="admin@pvamu.edu", password="adminpass123"):
++        with app.app_context():
++            user_repository.create(email, generate_password_hash(password), role="admin")
++        return client.post("/auth/login", data={"email": email, "password": password})
++    return _do
+diff --git a/tests/test_lot_admin.py b/tests/test_lot_admin.py
+new file mode 100644
+index 0000000..6b4cd77
+--- /dev/null
++++ b/tests/test_lot_admin.py
+@@ -0,0 +1,81 @@
++"""Story #6: As a Parking Office admin, I want to create and edit lots (name, zone, capacity),
++so that the system matches campus.
++
++Acceptance criteria (one test each):
++  AC1 An admin who submits a name, zone and capacity creates a lot that appears on the lots page.
++  AC2 An admin who edits a lot's name, zone or capacity sees the new values on the lots page.
++  AC3 A capacity that is not a whole number above 0, or is below the lot's occupied count,
++      is rejected with a message and nothing is saved.
++  AC4 A lot name already used by another lot is rejected with a message.
++  AC5 A driver who opens the create or edit page is redirected, and no lot changes.
++"""
++import pytest
++
++from app.db import get_db
++
++NEW_LOT = {"name": "Lot 99 - Test Lot", "zone": "Student", "capacity": "50"}
++
++
++def lot_count(app):
++    with app.app_context():
++        return get_db().execute("SELECT COUNT(*) FROM lot").fetchone()[0]
++
++
++def test_ac1_admin_creates_lot(client, login_as_admin):
++    login_as_admin()
++    client.post("/lots/new", data=NEW_LOT)
++    resp = client.get("/lots/")
++    assert b"Lot 99 - Test Lot" in resp.data
++    assert b"50 of 50" in resp.data
++
++
++def test_ac2_admin_edits_lot(client, login_as_admin):
++    login_as_admin()
++    client.post("/lots/1/edit",
++                data={"name": "Lot 1 - Renamed", "zone": "Faculty/Staff", "capacity": "300"})
++    resp = client.get("/lots/")
++    assert b"Lot 1 - Renamed" in resp.data
++    assert b"260 of 300" in resp.data  # 300 capacity minus 40 occupied
++
++
++@pytest.mark.parametrize("capacity", ["0", "-5", "abc", "10.5", ""])
++def test_ac3_bad_capacity_rejected_on_create(client, app, login_as_admin, capacity):
++    login_as_admin()
++    resp = client.post("/lots/new", data={**NEW_LOT, "capacity": capacity}, follow_redirects=True)
++    assert b"Capacity must be a whole number above 0." in resp.data
++    assert lot_count(app) == 3
++
++
++def test_ac3_capacity_below_occupied_rejected_on_edit(client, login_as_admin):
++    login_as_admin()
++    # Lot 2 has 120 of its 150 spaces occupied.
++    resp = client.post("/lots/2/edit",
++                       data={"name": "Lot 7 - Harrington Science", "zone": "Student", "capacity": "100"},
++                       follow_redirects=True)
++    assert b"lower than the 120 spaces occupied" in resp.data
++    assert b"30 of 150" in client.get("/lots/").data  # unchanged
++
++
++def test_ac4_duplicate_name_rejected(client, app, login_as_admin):
++    login_as_admin()
++    resp = client.post("/lots/new", data={**NEW_LOT, "name": "Lot 1 - Memorial Student Center"},
++                       follow_redirects=True)
++    assert b"A lot with that name already exists." in resp.data
++    assert lot_count(app) == 3
++    resp = client.post("/lots/2/edit",
++                       data={"name": "Lot 1 - Memorial Student Center", "zone": "Student", "capacity": "150"},
++                       follow_redirects=True)
++    assert b"A lot with that name already exists." in resp.data
++
++
++def test_ac5_driver_cannot_create_or_edit(client, app, register_and_login):
++    register_and_login()
++    responses = [
++        client.get("/lots/new"),
++        client.post("/lots/new", data=NEW_LOT),
++        client.get("/lots/1/edit"),
++        client.post("/lots/1/edit", data={"name": "Hacked", "zone": "Student", "capacity": "10"}),
++    ]
++    assert all(r.status_code == 302 for r in responses)
++    assert lot_count(app) == 3
++    assert b"Hacked" not in client.get("/lots/").data

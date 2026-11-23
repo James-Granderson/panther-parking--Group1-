@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit lot" if lot else "Add a lot" }} - Panther Parking{% endblock %}
+{% block content %}
+<h1>{{ "Edit lot" if lot else "Add a lot" }}</h1>
+<form method="post">
+  <label>Name <br><input name="name" value="{{ lot['name'] if lot else '' }}" required></label>
+  <label>Zone <br><input name="zone" value="{{ lot['zone'] if lot else '' }}" required></label>
+  <label>Capacity <br><input name="capacity" value="{{ lot['capacity'] if lot else '' }}" required></label>
+  <button type="submit">Save lot</button>
+</form>
+{% endblock %}

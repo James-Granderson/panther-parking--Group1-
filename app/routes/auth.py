@@ -24,6 +24,18 @@ def login_required(view):
     return wrapped
 
 
+def admin_required(view):
+    @functools.wraps(view)
+    def wrapped(**kwargs):
+        if g.user is None:
+            return redirect(url_for("auth.login"))
+        if g.user["role"] != "admin":
+            flash("Admin access required.")
+            return redirect(url_for("lots.index"))
+        return view(**kwargs)
+    return wrapped
+
+
 @bp.route("/register", methods=("GET", "POST"))
 def register():
     if request.method == "POST":

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Review permits - Panther Parking{% endblock %}
+{% block content %}
+<h1>Permit applications</h1>
+<table>
+  <thead><tr><th>Driver</th><th>Plate</th><th>Zone</th><th></th></tr></thead>
+  <tbody>
+  {% for p in permits %}
+    <tr>
+      <td>{{ p.email }}</td><td>{{ p.plate }}</td><td>{{ p.zone }}</td>
+      <td>
+        <form method="post" action="{{ url_for('permits.approve', permit_id=p.id) }}" style="display:inline"><button type="submit">Approve</button></form>
+        <form method="post" action="{{ url_for('permits.reject', permit_id=p.id) }}" style="display:inline"><button type="submit">Reject</button></form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">Nothing waiting for review.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

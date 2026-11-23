@@ -19,3 +19,9 @@ def create(email, password_hash, role="driver"):
     )
     db.commit()
     return cur.lastrowid
+
+
+def set_role(user_id, role):
+    db = get_db()
+    db.execute("UPDATE user SET role = ? WHERE id = ?", (role, user_id))
+    db.commit()

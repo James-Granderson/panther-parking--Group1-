@@ -1,0 +1,87 @@
+"""Story #3: As a student, I want to apply for a permit for a lot zone,
+so that I can park legally.
+
+Acceptance criteria:
+  AC1 A logged-in driver can apply for a permit for one of their vehicles and a zone
+      that exists, and sees the application as pending.
+  AC2 A driver cannot apply with a vehicle that belongs to someone else.
+  AC3 A vehicle with a pending or approved permit for a zone cannot apply for that
+      zone again. A rejected application does not block a new one.
+  AC4 A zone that no lot uses is rejected with a message.
+  AC5 A visitor who is not logged in is redirected to the login page.
+"""
+from app.db import get_db
+
+CAR = {"plate": "ABC123", "make": "Toyota", "model": "Corolla", "color": "Blue"}
+APPLY = {"vehicle_id": "1", "zone": "Student"}
+
+
+def permit_count(app):
+    with app.app_context():
+        return get_db().execute("SELECT COUNT(*) FROM permit").fetchone()[0]
+
+
+def set_status(app, status):
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE permit SET status = ?", (status,))
+        db.commit()
+
+
+def test_ac1_driver_applies_and_sees_pending(client, register_and_login):
+    register_and_login()
+    client.post("/vehicles/", data=CAR)
+    client.post("/permits/", data=APPLY)
+    resp = client.get("/permits/")
+    assert b"ABC123" in resp.data
+    assert b"pending" in resp.data
+
+
+def test_ac2_cannot_use_someone_elses_vehicle(client, app, register_and_login):
+    register_and_login("a@pvamu.edu")
+    client.post("/vehicles/", data=CAR)
+    client.get("/auth/logout")
+    register_and_login("b@pvamu.edu")
+    resp = client.post("/permits/", data=APPLY, follow_redirects=True)
+    assert b"registered to you" in resp.data
+    assert permit_count(app) == 0
+
+
+def test_ac3_pending_application_blocks_a_second(client, app, register_and_login):
+    register_and_login()
+    client.post("/vehicles/", data=CAR)
+    client.post("/permits/", data=APPLY)
+    resp = client.post("/permits/", data=APPLY, follow_redirects=True)
+    assert b"already have a permit application" in resp.data
+    assert permit_count(app) == 1
+
+
+def test_ac3_approved_blocks_but_rejected_allows_a_new_application(
+    client, app, register_and_login
+):
+    register_and_login()
+    client.post("/vehicles/", data=CAR)
+    client.post("/permits/", data=APPLY)
+    set_status(app, "approved")
+    resp = client.post("/permits/", data=APPLY, follow_redirects=True)
+    assert b"already have a permit application" in resp.data
+    assert permit_count(app) == 1
+    set_status(app, "rejected")
+    client.post("/permits/", data=APPLY)
+    assert permit_count(app) == 2
+
+
+def test_ac4_unknown_zone_rejected(client, app, register_and_login):
+    register_and_login()
+    client.post("/vehicles/", data=CAR)
+    resp = client.post(
+        "/permits/", data={"vehicle_id": "1", "zone": "Nowhere"}, follow_redirects=True
+    )
+    assert b"Choose a zone that exists." in resp.data
+    assert permit_count(app) == 0
+
+
+def test_ac5_visitor_redirected_to_login(client):
+    resp = client.get("/permits/")
+    assert resp.status_code == 302
+    assert "/auth/login" in resp.headers["Location"]

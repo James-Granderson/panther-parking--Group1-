@@ -16,6 +16,13 @@ def find_by_plate(plate):
     return dict(row) if row else None
 
 
+def find_by_id(vehicle_id):
+    row = get_db().execute(
+        "SELECT * FROM vehicle WHERE id = ?", (vehicle_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def list_for_user(user_id):
     rows = get_db().execute(
         "SELECT * FROM vehicle WHERE user_id = ? ORDER BY plate", (user_id,)

@@ -1,0 +1,67 @@
+"""Story #4: As an admin, I want to approve or reject permit applications,
+so that only eligible drivers get permits.
+
+Acceptance criteria:
+  AC1 An admin sees pending applications, with plate and zone, on the review page.
+  AC2 An admin who approves an application sets its status to approved.
+  AC3 An admin who rejects an application sets its status to rejected.
+  AC4 A driver who opens the review page or posts a decision is redirected,
+      and the permit stays pending.
+  AC5 A permit that has already been approved or rejected cannot be decided again.
+"""
+import pytest
+
+from app.db import get_db
+
+CAR = {"plate": "ABC123", "make": "Toyota", "model": "Corolla", "color": "Blue"}
+
+
+@pytest.fixture
+def pending_permit(client, register_and_login):
+    register_and_login("driver@pvamu.edu")
+    client.post("/vehicles/", data=CAR)
+    client.post("/permits/", data={"vehicle_id": "1", "zone": "Student"})
+    client.get("/auth/logout")
+
+
+def permit_status(app):
+    with app.app_context():
+        return get_db().execute("SELECT status FROM permit WHERE id = 1").fetchone()["status"]
+
+
+def test_ac1_admin_sees_pending_applications(client, login_as_admin, pending_permit):
+    login_as_admin()
+    resp = client.get("/permits/review")
+    assert b"ABC123" in resp.data
+    assert b"Student" in resp.data
+
+
+def test_ac2_admin_approves(client, app, login_as_admin, pending_permit):
+    login_as_admin()
+    client.post("/permits/1/approve")
+    assert permit_status(app) == "approved"
+
+
+def test_ac3_admin_rejects(client, app, login_as_admin, pending_permit):
+    login_as_admin()
+    client.post("/permits/1/reject")
+    assert permit_status(app) == "rejected"
+
+
+def test_ac4_driver_cannot_review_or_decide(
+    client, app, register_and_login, pending_permit
+):
+    register_and_login("driver@pvamu.edu")
+    assert client.get("/permits/review").status_code == 302
+    assert client.post("/permits/1/approve").status_code == 302
+    assert permit_status(app) == "pending"
+
+
+def test_ac5_decided_permit_cannot_be_decided_again(
+    client, app, login_as_admin, pending_permit
+):
+    login_as_admin()
+    client.post("/permits/1/approve")
+    resp = client.post("/permits/1/reject", follow_redirects=True)
+    assert b"already been decided" in resp.data
+    assert permit_status(app) == "approved"

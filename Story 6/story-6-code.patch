@@ -1,0 +1,203 @@
+diff --git a/app/repositories/lot_repository.py b/app/repositories/lot_repository.py
+index b7ec5dd..816aebd 100644
+--- a/app/repositories/lot_repository.py
++++ b/app/repositories/lot_repository.py
+@@ -4,3 +4,28 @@ from ..db import get_db
+ def list_all():
+     rows = get_db().execute("SELECT * FROM lot ORDER BY name").fetchall()
+     return [dict(r) for r in rows]
++
++
++def find_by_id(lot_id):
++    row = get_db().execute("SELECT * FROM lot WHERE id = ?", (lot_id,)).fetchone()
++    return dict(row) if row else None
++
++
++def find_by_name(name):
++    row = get_db().execute("SELECT * FROM lot WHERE name = ?", (name,)).fetchone()
++    return dict(row) if row else None
++
++
++def create(name, zone, capacity):
++    db = get_db()
++    cur = db.execute("INSERT INTO lot (name, zone, capacity) VALUES (?, ?, ?)",
++                     (name, zone, capacity))
++    db.commit()
++    return cur.lastrowid
++
++
++def update(lot_id, name, zone, capacity):
++    db = get_db()
++    db.execute("UPDATE lot SET name = ?, zone = ?, capacity = ? WHERE id = ?",
++               (name, zone, capacity, lot_id))
++    db.commit()
+diff --git a/app/routes/auth.py b/app/routes/auth.py
+index c6b821d..4a38588 100644
+--- a/app/routes/auth.py
++++ b/app/routes/auth.py
+@@ -24,6 +24,18 @@ def login_required(view):
+     return wrapped
+ 
+ 
++def admin_required(view):
++    @functools.wraps(view)
++    def wrapped(**kwargs):
++        if g.user is None:
++            return redirect(url_for("auth.login"))
++        if g.user["role"] != "admin":
++            flash("Only Parking Office admins can do that.")
++            return redirect(url_for("lots.index"))
++        return view(**kwargs)
++    return wrapped
++
++
+ @bp.route("/register", methods=("GET", "POST"))
+ def register():
+     if request.method == "POST":
+diff --git a/app/routes/lots.py b/app/routes/lots.py
+index 1eb1200..986e375 100644
+--- a/app/routes/lots.py
++++ b/app/routes/lots.py
+@@ -1,6 +1,8 @@
+-from flask import Blueprint, render_template
++from flask import Blueprint, flash, redirect, render_template, request, url_for
+ 
+ from ..services import lot_service
++from ..services.lot_service import LotError
++from .auth import admin_required
+ 
+ bp = Blueprint("lots", __name__, url_prefix="/lots")
+ 
+@@ -8,3 +10,36 @@ bp = Blueprint("lots", __name__, url_prefix="/lots")
+ @bp.route("/")
+ def index():
+     return render_template("lots.html", lots=lot_service.lots_with_status())
++
++
++@bp.route("/new", methods=("GET", "POST"))
++@admin_required
++def new():
++    if request.method == "POST":
++        try:
++            lot_service.create_lot(request.form.get("name"), request.form.get("zone"),
++                                   request.form.get("capacity"))
++            flash("Lot created.")
++            return redirect(url_for("lots.index"))
++        except LotError as e:
++            flash(str(e))
++    return render_template("lot_form.html", lot=None)
++
++
++@bp.route("/<int:lot_id>/edit", methods=("GET", "POST"))
++@admin_required
++def edit(lot_id):
++    try:
++        lot = lot_service.get_lot(lot_id)
++    except LotError as e:
++        flash(str(e))
++        return redirect(url_for("lots.index"))
++    if request.method == "POST":
++        try:
++            lot_service.update_lot(lot_id, request.form.get("name"), request.form.get("zone"),
++                                   request.form.get("capacity"))
++            flash("Lot updated.")
++            return redirect(url_for("lots.index"))
++        except LotError as e:
++            flash(str(e))
++    return render_template("lot_form.html", lot=lot)
+diff --git a/app/services/lot_service.py b/app/services/lot_service.py
+index 1275db4..68dd732 100644
+--- a/app/services/lot_service.py
++++ b/app/services/lot_service.py
+@@ -22,3 +22,46 @@ def lots_with_status():
+         lot["status"] = status_for(lot["capacity"], lot["occupied"])
+         lot["available"] = max(lot["capacity"] - lot["occupied"], 0)
+     return lots
++
++
++class LotError(Exception):
++    """Raised with a user-facing message when a rule is broken."""
++
++
++def _clean(name, zone, capacity_raw):
++    name = (name or "").strip()
++    zone = (zone or "").strip()
++    if not name or not zone:
++        raise LotError("Name and zone are required.")
++    try:
++        capacity = int(str(capacity_raw).strip())
++    except ValueError:
++        raise LotError("Capacity must be a whole number above 0.")
++    if capacity < 1:
++        raise LotError("Capacity must be a whole number above 0.")
++    return name, zone, capacity
++
++
++def get_lot(lot_id):
++    lot = lot_repository.find_by_id(lot_id)
++    if lot is None:
++        raise LotError("That lot does not exist.")
++    return lot
++
++
++def create_lot(name, zone, capacity_raw):
++    name, zone, capacity = _clean(name, zone, capacity_raw)
++    if lot_repository.find_by_name(name):
++        raise LotError("A lot with that name already exists.")
++    return lot_repository.create(name, zone, capacity)
++
++
++def update_lot(lot_id, name, zone, capacity_raw):
++    lot = get_lot(lot_id)
++    name, zone, capacity = _clean(name, zone, capacity_raw)
++    other = lot_repository.find_by_name(name)
++    if other and other["id"] != lot_id:
++        raise LotError("A lot with that name already exists.")
++    if capacity < lot["occupied"]:
++        raise LotError(f"Capacity can't be lower than the {lot['occupied']} spaces occupied.")
++    lot_repository.update(lot_id, name, zone, capacity)
+diff --git a/app/templates/lot_form.html b/app/templates/lot_form.html
+new file mode 100644
+index 0000000..d7ed13a
+--- /dev/null
++++ b/app/templates/lot_form.html
+@@ -0,0 +1,11 @@
++{% extends "base.html" %}
++{% block title %}{{ "Edit lot" if lot else "Add a lot" }} - Panther Parking{% endblock %}
++{% block content %}
++<h1>{{ "Edit lot" if lot else "Add a lot" }}</h1>
++<form method="post">
++  <label>Name <br><input name="name" value="{{ lot['name'] if lot else '' }}" required></label>
++  <label>Zone <br><input name="zone" value="{{ lot['zone'] if lot else '' }}" required></label>
++  <label>Capacity <br><input name="capacity" value="{{ lot['capacity'] if lot else '' }}" required></label>
++  <button type="submit">Save lot</button>
++</form>
++{% endblock %}
+diff --git a/app/templates/lots.html b/app/templates/lots.html
+index 821af0f..d9f3049 100644
+--- a/app/templates/lots.html
++++ b/app/templates/lots.html
+@@ -1,8 +1,10 @@
+ {% extends "base.html" %}
+ {% block content %}
+ <h1>Parking lots</h1>
++{% set is_admin = g.user and g.user['role'] == 'admin' %}
++{% if is_admin %}<p><a href="{{ url_for('lots.new') }}">Add a lot</a></p>{% endif %}
+ <table>
+-  <thead><tr><th>Lot</th><th>Zone</th><th>Spaces available</th><th>Status</th></tr></thead>
++  <thead><tr><th>Lot</th><th>Zone</th><th>Spaces available</th><th>Status</th>{% if is_admin %}<th></th>{% endif %}</tr></thead>
+   <tbody>
+   {% for lot in lots %}
+     <tr>
+@@ -10,9 +12,10 @@
+       <td>{{ lot.zone }}</td>
+       <td>{{ lot.available }} of {{ lot.capacity }}</td>
+       <td class="{{ lot.status }}">{{ lot.status }}</td>
++      {% if is_admin %}<td><a href="{{ url_for('lots.edit', lot_id=lot.id) }}">Edit</a></td>{% endif %}
+     </tr>
+   {% else %}
+-    <tr><td colspan="4">No lots yet.</td></tr>
++    <tr><td colspan="5">No lots yet.</td></tr>
+   {% endfor %}
+   </tbody>
+ </table>

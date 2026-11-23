@@ -26,3 +26,10 @@ def authenticate(email, password):
     if user is None or not check_password_hash(user["password_hash"], password or ""):
         raise AuthError("Incorrect email or password.")
     return user
+
+
+def make_admin(email):
+    user = user_repository.find_by_email((email or "").strip().lower())
+    if user is None:
+        raise AuthError("No account with that email.")
+    user_repository.set_role(user["id"], "admin")
